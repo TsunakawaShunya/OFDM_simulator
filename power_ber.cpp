@@ -12,7 +12,7 @@
 static const double WEIGHT_OF_LAST_PATH = 0.1;
 static const int EbN0dBmin = 0;
 static const int EbN0dBmax = 30;
-static const int EbN0dBstp = 1;
+static const int EbN0dBstp = 5;
 
 // ファイル
 std::string fileName;       // ファイル名
@@ -44,7 +44,6 @@ int main()
         // シミュレーション
         ber = sim.getBERSimulation();
         // 標準出力
-        std::cout << "-----------" << std::endl;
         std::cout << EbN0dB << "," << ber << std::endl;
         // CSV出力
 		ofs << EbN0dB << "," << ber << std::endl;

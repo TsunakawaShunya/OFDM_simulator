@@ -23,16 +23,16 @@ class Simulator {
             std::cin >> NUMBER_OF_TRIAL;
 
             // リサイズ
-            W_.resize(K_, Q_);
+            W_.resize(Q_, K_);
             quzaiSqrt_.resize(Q_);
             h_.resize(L_, Q_);
             H_.resize(L_, K_);
             H_est_.resize(K_);
-
             txData_.resize(L_, K_);
             rxData_.resize(L_, K_);
             Y_.resize(L_, K_);
             X_.resize(L_, K_);
+            R_.resize(L_, K_);
             symbol_.resize(NUMBER_OF_SYMBOLS);
 
             // DFT行列設定
@@ -42,7 +42,7 @@ class Simulator {
             setSymbol();
 
             // 乱数設定
-            unitIntUniformRand_.init(0, NUMBER_OF_SYMBOLS, seed);
+            unitIntUniformRand_.init(0, NUMBER_OF_SYMBOLS - 1, seed);
             unitCNormalRand_.init(0.0, 1 / sqrt(2), seed);
 
             // 遅延プロファイル生成
@@ -58,7 +58,7 @@ class Simulator {
          * @param EbN0dB EbN0 [dB]
          */
         void setNoiseSD(double EbN0dB) {
-            noiseSD_ = std::sqrt(0.5 * std::pow(10.0, -0.1 * EbN0dB));
+            noiseSD_ = std::sqrt(std::pow(10.0, -0.1 * EbN0dB) / (double)NUMBER_OF_BIT);
         }
 
         /**
@@ -84,7 +84,7 @@ class Simulator {
                 setRxDataByML();
                 count += getBitErrorCount();
             }
-            return (double)count / (double)NUMBER_OF_TRIAL / (double)NUMBER_OF_BIT;
+            return (double)count / (double)NUMBER_OF_TRIAL / (double)NUMBER_OF_BIT / (double)K_ / (double)L_;
         }
 
         /**
@@ -120,8 +120,8 @@ class Simulator {
 
         Eigen::MatrixXcd W_;            // DFT行列:式(17)
         Eigen::VectorXd quzaiSqrt_;     // 伝送路のインパルス応答の遅延プロファイル（ルート）
-        Eigen::VectorXcd h_;            // インパルス応答
-        Eigen::VectorXcd H_;            // 周波数応答
+        Eigen::MatrixXcd h_;            // インパルス応答
+        Eigen::MatrixXcd H_;            // 周波数応答
         Eigen::MatrixXi txData_;        // 送信アルファベット
         Eigen::MatrixXi rxData_;        // 受信アルファベット
         Eigen::VectorXcd symbol_;       // 送信可能なシンボルベクトル
@@ -140,9 +140,9 @@ class Simulator {
             for (auto q = 0; q < Q_; ++q) {
                 for (auto k = 0; k < K_ / 2; ++k) {
                     // -26から-1番目のキャリヤ
-                    W_(k, q) = std::polar(1.0, -2.0 * M_PI * (k - K_ / 2) * q / NUMBER_OF_FFT);
+                    W_(q, k) = std::polar(1.0, -2.0 * M_PI * (k - K_ / 2) * q / NUMBER_OF_FFT);
                     // 1から26番目のキャリヤ
-                    W_(k + K_ / 2, q) = std::polar(1.0, -2.0 * M_PI * (k + 1) * q / NUMBER_OF_FFT);
+                    W_(q, k + K_ / 2) = std::polar(1.0, -2.0 * M_PI * (k + 1) * q / NUMBER_OF_FFT);
                 }
             }
         }
@@ -153,8 +153,6 @@ class Simulator {
          */
         void setChannelProfile(double weightOfLastPath) {
             assert(0 < weightOfLastPath && weightOfLastPath <= 1.0);
-            // 平均0，分散1の複素正規分布（実部，虚部それぞれ平均0，分散0.5の正規分布）
-            unitCNormalRand_.init(0.0, 1 / sqrt(2), seed);
             // 伝送路プロファイルの減衰係数
             decayConstant_ = - NUMBER_OF_FFT * std::log(weightOfLastPath) / T_ / (Q_ - 1);
 
@@ -197,7 +195,7 @@ class Simulator {
                 }
             }
             // 伝送路の周波数応答の生成:式(19)
-            H_ = W_ * h_;
+            H_ = h_ * W_;
         }
 
         /**
@@ -227,10 +225,9 @@ class Simulator {
 
         /**
          * MLによる伝送路推定
-         * @return 誤差のL2ノルム
          */
         void estimateChannelByML() {
-            Eigen::MatrixXcd sum(K_);
+            Eigen::VectorXcd sum(K_);
             sum.setZero();
             for(auto k = 0; k < K_; k++) {
                 for(auto i = 0; i < NUMBER_OF_PILOT; i++) {
@@ -253,8 +250,19 @@ class Simulator {
         }
 
         /**
-         * シンボル生成
-         * IEEE802.11aとかgってBPSKじゃなかったっけ？
+         * 完璧な等化
+         */
+        void equalizePerfectly() {
+            for(auto l = 0; l < L_; l++) {
+                for(auto k = 0; k < K_; k++) {
+                    R_(l, k) = Y_(l, k) / H_(l, k);
+                }
+            }
+        }
+
+
+        /**
+         * シンボル生成（BPSK）
          */
         void setSymbol() {
             symbol_(0) = -1;
@@ -272,6 +280,24 @@ class Simulator {
                     for(auto i = 0; i < NUMBER_OF_SYMBOLS; i++) {
                         // 最尤復調の周波数応答は推定値を使う？
                         obj(i) = std::norm(H_est_(k)) * std::norm((R_(l, k) - symbol_(i)));
+                    }
+                    Eigen::VectorXd::Index minColumn;       // ノルムが最小な index（つまり受信データ）
+                    obj.minCoeff(&minColumn);
+                    rxData_(l, k) = minColumn;
+                }
+            }
+        }
+
+        /**
+         * 最尤復調（完璧な推定値の場合）
+         */
+        void setRxDataByPerfect() {
+            Eigen::VectorXd obj(NUMBER_OF_SYMBOLS);     // 最小化の目的関数
+
+            for(auto l = 0; l < L_; l++) {
+                for(auto k = 0; k < K_; k++) {
+                    for(auto i = 0; i < NUMBER_OF_SYMBOLS; i++) {
+                        obj(i) = std::norm(H_(l, k)) * std::norm((R_(l, k) - symbol_(i)));
                     }
                     Eigen::VectorXd::Index minColumn;       // ノルムが最小な index（つまり受信データ）
                     obj.minCoeff(&minColumn);
