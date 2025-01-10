@@ -11,6 +11,7 @@
 #include </Volumes/USB1/eigen-3.4.0/Eigen/Core>
 #include </Volumes/USB1/eigen-3.4.0/Eigen/Eigen>
 #include <cmath>
+#include <utility>
 #include "random_collection.h"
 
 class Simulator {
@@ -33,11 +34,14 @@ class Simulator {
             Y_.resize(L_, K_);
             X_.resize(L_, K_);
             R_.resize(L_, K_);
+            Cmat_.resize(L_, L_);
             symbol_.resize(NUMBER_OF_SYMBOLS);
 
             // DFT行列設定
             setW_();
 
+            // 共分散行列設定
+            setCmat_();
             // シンボル設計
             setSymbol();
 
@@ -110,6 +114,8 @@ class Simulator {
         const int L_ = 10;                          // 1フレームのシンボル数（わからん） L
         const int Q_ = 16;                          // 伝送路のインパルス応答のパス数 Q
         const double T_ = 32.0;                     // 有効シンボル長 T
+        const double TGI_ = 8.0;                    // ガードインターバル長 TGI
+        double Ts_ = T_ + TGI_;                     // シンボル長
         const int NUMBER_OF_FFT = K_;               // FFTポイント数(IEEE802.11aとかは64だった気がする)
         const int NUMBER_OF_PILOT = 2;              // パイロットシンボル個数
         const int NUMBER_OF_SYMBOLS = 2;            // 変調方式に合わせて(BPSKの例)
@@ -128,6 +134,7 @@ class Simulator {
         Eigen::MatrixXcd Y_;            // 受信信号
         Eigen::MatrixXcd X_;            // 送信信号
         Eigen::MatrixXcd R_;            // 等化後の受信信号
+        Eigen::MatrixXcd Cmat_;         // Jakesモデルの共分散行列
         Eigen::VectorXcd H_est_;        // 伝送路の周波数応答の推定値
 
         // 乱数用
@@ -189,13 +196,64 @@ class Simulator {
         void setH_() {
             // 伝送路のインパルス応答の生成
             // おそらくここに時間変化のJakesモデルを入れる
-            for(auto l = 0; l < L_; l++) {
-                for (auto q = 0; q < Q_; ++q) {
-                    h_(l, q) = quzaiSqrt_(q) * unitCNormalRand_();
-                }
-            }
+            seth_();
             // 伝送路の周波数応答の生成:式(19)
             H_ = h_ * W_;
+        }
+
+        /**
+         * Jakesモデルの共分散行列生成
+         */
+        void setCmat_() {
+            for(auto l_1 = 0; l_1 < L_; l_1++) {
+                for(auto l_2 = 0; l_2 < L_; l_2++) {
+                    Cmat_(l_1, l_2) = j0(2 * M_PI * abs((l_1 - l_2) * Ts_) * f_d_);
+                }
+            }
+        }
+
+        /**
+         * インパルス応答行列生成
+         */
+        void seth_() {
+            Eigen::VectorXcd h_q(L_);
+            Eigen::MatrixXcd A(L_, L_);
+            Eigen::VectorXcd x(L_);
+
+            // Cmat_ = U * Lambda * U^-1 に固有値分解してUとΛを取得
+            auto [U, Lambda] = EigenvalueDecomposition(Cmat_);
+            // A生成
+            A = U * Lambda.array().sqrt().matrix();
+
+
+            for(auto q = 0; q < Q_; q++) {
+                for(auto l = 0; l < L_; l++) {
+                    x(l) = quzaiSqrt_(q) * unitCNormalRand_();
+                    h_q = A * x;        // h_q = Ax
+                    h_(l, q) = h_q(l);
+                }
+            }
+        }
+
+        /**
+         * 固有値分解
+         * @param mat 固有値分解する行列
+         * @return std::pair ユニタリー行列U, 固有値行列Lambda
+         */
+        std::pair<Eigen::MatrixXcd, Eigen::MatrixXcd> EigenvalueDecomposition(const Eigen::MatrixXcd& mat) {
+            Eigen::EigenSolver<Eigen::MatrixXcd> solver(mat);
+
+            // 固有値を取得 (対角行列として表現)
+            Eigen::MatrixXcd Lambda = Eigen::MatrixXcd::Zero(L_, L_);
+            Eigen::VectorXcd eigenvalues = solver.eigenvalues(); // 固有値ベクトル
+            for (int i = 0; i < L_; ++i) {
+                Lambda(i, i) = eigenvalues(i); // 固有値を対角行列に配置
+            }
+
+            // 固有ベクトル (ユニタリー行列 U) を取得
+            Eigen::MatrixXcd U = solver.eigenvectors();
+
+            return std::make_pair(U, Lambda);
         }
 
         /**
