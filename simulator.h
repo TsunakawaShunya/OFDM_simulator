@@ -8,8 +8,10 @@
 #ifndef SIMULATOR_H
 #define SIMULATOR_H
 #define _USE_MATH_DEFINES
-#include </Volumes/USB1/eigen-3.4.0/Eigen/Core>
-#include </Volumes/USB1/eigen-3.4.0/Eigen/Eigen>
+#include <Eigen/Core>
+#include <Eigen/Eigen>
+#include <boost/math/special_functions/bessel.hpp>
+#include <iostream>
 #include <cmath>
 #include <utility>
 #include "random_collection.h"
@@ -35,19 +37,21 @@ class Simulator {
             X_.resize(L_, K_);
             R_.resize(L_, K_);
             Cmat_.resize(L_, L_);
+            U_q_.resize(L_, L_);
+            LambdaSqrt_q_.resize(L_, L_);
+            A_q_.resize(L_, L_);
             symbol_.resize(NUMBER_OF_SYMBOLS);
 
             // DFT行列設定
             setW_();
 
-            // 共分散行列設定
-            setCmat_();
             // シンボル設計
             setSymbol();
 
             // 乱数設定
             unitIntUniformRand_.init(0, NUMBER_OF_SYMBOLS - 1, seed);
             unitCNormalRand_.init(0.0, 1 / sqrt(2), seed);
+            unitNormalRand_.init(0.0, 1.0, seed);
 
             // 遅延プロファイル生成
             setChannelProfile(weightOfLastPath);
@@ -83,9 +87,11 @@ class Simulator {
                 setX_();
                 setH_();
                 setY_();
-                estimateChannelByML();
-                equalizeByEstimatedChannel();
-                setRxDataByML();
+                //estimateChannelByML();
+                //equalizeByEstimatedChannel();
+                //setRxDataByML();
+                equalizePerfectly();
+                setRxDataByPerfect();
                 count += getBitErrorCount();
             }
             return (double)count / (double)NUMBER_OF_TRIAL / (double)NUMBER_OF_BIT / (double)K_ / (double)L_;
@@ -134,13 +140,17 @@ class Simulator {
         Eigen::MatrixXcd Y_;            // 受信信号
         Eigen::MatrixXcd X_;            // 送信信号
         Eigen::MatrixXcd R_;            // 等化後の受信信号
-        Eigen::MatrixXcd Cmat_;         // Jakesモデルの共分散行列
+        Eigen::MatrixXcd Cmat_;          // Jakesモデルの共分散行列
+        Eigen::MatrixXcd U_q_;             // Jakesモデルのユニタリー行列
+        Eigen::MatrixXcd LambdaSqrt_q_;        // Jakesモデルの固有値
+        Eigen::MatrixXcd A_q_;               // JakesモデルのA_q
         Eigen::VectorXcd H_est_;        // 伝送路の周波数応答の推定値
 
         // 乱数用
         int seed = 100;
         uniform_int_distribution<> unitIntUniformRand_;     // int型一様乱数
         cnormal_distribution<> unitCNormalRand_;            // 平均0，分散1の複素正規分布（実部，虚部それぞれ平均0，分散0.5の正規分布）
+        normal_distribution<> unitNormalRand_;              // 平均0，分散1の正規分布
 
         // DFT行列Wの生成:式(17)
         void setW_() {
@@ -194,10 +204,9 @@ class Simulator {
          * 周波数応答生成
          */
         void setH_() {
-            // 伝送路のインパルス応答の生成
-            // おそらくここに時間変化のJakesモデルを入れる
-            seth_();
-            // 伝送路の周波数応答の生成:式(19)
+            // インパルス応答行列生成
+            seth_test();
+            // フーリエ変換して伝送路の周波数応答の生成:式(19)
             H_ = h_ * W_;
         }
 
@@ -205,9 +214,20 @@ class Simulator {
          * Jakesモデルの共分散行列生成
          */
         void setCmat_() {
-            for(auto l_1 = 0; l_1 < L_; l_1++) {
-                for(auto l_2 = 0; l_2 < L_; l_2++) {
-                    Cmat_(l_1, l_2) = j0(2 * M_PI * abs((l_1 - l_2) * Ts_) * f_d_);
+            for(auto l1 = 0; l1 < L_; l1++) {
+                for(auto l2 = 0; l2 < L_; l2++) {
+                    Cmat_(l1, l2) = boost::math::cyl_bessel_j(0, 2 * M_PI * abs((l1 - l2) * Ts_) * f_d_);
+                }
+            }
+        }
+
+        /**
+         * インパルス応答行列生成（時間方向なし）
+         */
+        void seth_test() {
+            for(auto q = 0; q < Q_; q++) {
+                for(auto l = 0; l < L_; l++) {
+                    h_(l, q) = quzaiSqrt_(q) * unitCNormalRand_();
                 }
             }
         }
@@ -217,19 +237,27 @@ class Simulator {
          */
         void seth_() {
             Eigen::VectorXcd h_q(L_);
-            Eigen::MatrixXcd A(L_, L_);
             Eigen::VectorXcd x(L_);
 
-            // Cmat_ = U * Lambda * U^-1 に固有値分解してUとΛを取得
-            auto [U, Lambda] = EigenvalueDecomposition(Cmat_);
-            // A生成
-            A = U * Lambda.array().sqrt().matrix();
-
-
             for(auto q = 0; q < Q_; q++) {
+                // 共分散行列設定
+                setCmat_();
+                Cmat_ = std::pow(quzaiSqrt_(q), 2) * Cmat_;
+
+                // 固有値分解
+                EigenvalueDecomposition();
+
+                // A_q生成
+                A_q_ = U_q_ * LambdaSqrt_q_;
+
                 for(auto l = 0; l < L_; l++) {
-                    x(l) = quzaiSqrt_(q) * unitCNormalRand_();
-                    h_q = A * x;        // h_q = Ax
+                    x(l) = unitCNormalRand_();
+                }
+
+                // h_q = xなら同じ
+                h_q = A_q_ * x;
+
+                for(auto l = 0; l < L_; l++) {
                     h_(l, q) = h_q(l);
                 }
             }
@@ -237,23 +265,14 @@ class Simulator {
 
         /**
          * 固有値分解
-         * @param mat 固有値分解する行列
-         * @return std::pair ユニタリー行列U, 固有値行列Lambda
+         * 共分散行列Cmat_を固有値分解してユニタリー行列U_q_と固有値の平方根LambdaSqrt_q_を取得
          */
-        std::pair<Eigen::MatrixXcd, Eigen::MatrixXcd> EigenvalueDecomposition(const Eigen::MatrixXcd& mat) {
-            Eigen::EigenSolver<Eigen::MatrixXcd> solver(mat);
-
-            // 固有値を取得 (対角行列として表現)
-            Eigen::MatrixXcd Lambda = Eigen::MatrixXcd::Zero(L_, L_);
-            Eigen::VectorXcd eigenvalues = solver.eigenvalues(); // 固有値ベクトル
-            for (int i = 0; i < L_; ++i) {
-                Lambda(i, i) = eigenvalues(i); // 固有値を対角行列に配置
-            }
-
-            // 固有ベクトル (ユニタリー行列 U) を取得
-            Eigen::MatrixXcd U = solver.eigenvectors();
-
-            return std::make_pair(U, Lambda);
+        void EigenvalueDecomposition() {
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXcd> solver(Cmat_);
+            // 固有値の平方根を対角行列として取得
+            LambdaSqrt_q_ = solver.eigenvalues().cwiseSqrt().asDiagonal();
+            // 固有ベクトルを取得
+            U_q_ = solver.eigenvectors();
         }
 
         /**
@@ -272,25 +291,25 @@ class Simulator {
          * @return 誤差のL2ノルム
          */
         double getMeanSquaredError() {
-            double sum = 0;
+            double mse = 0.0;
             for(auto k = 0; k < K_; k++) {
                 for(auto l = 0; l < L_; l++) {
-                    sum += std::norm(H_(l, k) - H_est_(k));
+                    mse += std::norm(H_(l, k) - H_est_(k));
                 }
             }
-            return sqrt(sum / (double)L_ / (double)K_);
+            return mse / K_ / L_;
         }
 
         /**
          * MLによる伝送路推定
          */
         void estimateChannelByML() {
-            Eigen::VectorXcd sum(K_);
-            sum.setZero();
+            Eigen::VectorXcd sum = Eigen::VectorXcd::Zero(K_);
+
             for(auto k = 0; k < K_; k++) {
                 for(auto i = 0; i < NUMBER_OF_PILOT; i++) {
                     // パイロットシンボル区間での推定
-                    sum(k) += Y_(k, i) / X_(k, i);
+                    sum(k) += Y_(i, k) / X_(i, k);
                 }
             }
             H_est_ = sum / NUMBER_OF_PILOT;

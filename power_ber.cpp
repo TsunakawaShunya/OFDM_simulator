@@ -26,9 +26,6 @@ double dopplerFrequence;
 
 int main()
 {
-	fileName = "BER.csv";
-	ofs.open(fileName);
-
     Simulator sim(WEIGHT_OF_LAST_PATH);
 
     // ドップラー周波数を設定
@@ -37,6 +34,10 @@ int main()
     std::cout << "--------------------------------------------------------------------" << std::endl;
     std::cin >> dopplerFrequence;
     sim.setDopplerFrequence(dopplerFrequence);
+
+    fileName = "BER_f_d=" + std::to_string(dopplerFrequence) + ".csv";
+	ofs.open(fileName);
+
 
     for (auto EbN0dB = EbN0dBmin; EbN0dB <= EbN0dBmax; EbN0dB += EbN0dBstp) {
         // SN設定

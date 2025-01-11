@@ -1,17 +1,29 @@
-#include </Volumes/USB1/eigen-3.4.0/Eigen/Core>
-#include </Volumes/USB1/eigen-3.4.0/Eigen/Eigen>
+#include <Eigen/Core>
+#include <Eigen/Eigen>
 #include <iostream>
 
 int main() {
-    Eigen::Vector3d vec1(1, 2, 3);
-    Eigen::Vector3d vec2(4, 5, 6);
-
-    std::cout << "vec1" << std::endl;
-    std::cout << vec1 << std::endl;
-    std::cout << "vec2" << std::endl;
-    std::cout << vec2 << std::endl;
-    std::cout << "sum" << std::endl;
-    std::cout << vec1 + vec2 << std::endl;
+    Eigen::MatrixXd mat(3, 3);
+    mat << 1, 1, 1,
+           1, 1, 1,
+           1, 1, 1;
     
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(mat);
+    Eigen::MatrixXd Lambda = es.eigenvalues().asDiagonal();
+
+    // 1e-10以下の成分を0にする
+    for (int i = 0; i < Lambda.rows(); ++i) {
+        if (std::abs(Lambda(i, i)) < 1e-10) {
+            Lambda(i, i) = 0;
+        }
+    }
+
+    std::cout << "Lambda = " << Lambda << std::endl;
+    Eigen::MatrixXd U = es.eigenvectors();
+    std::cout << "U = " << U << std::endl;
+
+    std::cout << "mat =  " << U * Lambda * U.inverse() << std::endl;
+    
+    std::cout << "A_q = " << U * Lambda.cwiseSqrt() << std::endl;
     return 0;
 }

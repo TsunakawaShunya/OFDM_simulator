@@ -1,4 +1,3 @@
-
 /*
  * File:   power_mse.cpp
  * Author: Tsunakawa
@@ -11,7 +10,7 @@
 
 // パラメータ
 static const double WEIGHT_OF_LAST_PATH = 0.1;
-static const int dopplerFrequence_min = 0;
+static const int dopplerFrequence_min = 0.1;
 static const int dopplerFrequence_max = 1;
 static const int dopplerFrequence_stp = 0.1;
 
@@ -26,9 +25,6 @@ double mse;
 double EbN0dB;
 
 int main() {
-	fileName = "MSE.csv";
-	ofs.open(fileName);
-
     Simulator sim(WEIGHT_OF_LAST_PATH);
 
     // SNを設定
@@ -37,6 +33,9 @@ int main() {
     std::cout << "--------------------------------------------------------------------" << std::endl;
     std::cin >> EbN0dB;
     sim.setNoiseSD(EbN0dB);
+
+    fileName = "MSE_EbN0=" + std::to_string(EbN0dB) + ".csv";
+	ofs.open(fileName);
 
     for (auto dopplerFrequence = dopplerFrequence_min; dopplerFrequence <= dopplerFrequence_max; dopplerFrequence += dopplerFrequence_stp) {
         // SN設定
